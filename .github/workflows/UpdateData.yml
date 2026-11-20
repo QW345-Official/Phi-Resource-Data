@@ -12,60 +12,61 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - name: 安装依赖
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: 运行 taptap.py 并解析 version_code / version_name / download
+      - name: Run taptap.py and parse
         id: parse
         run: |
           set -euo pipefail
           OUTPUT=$(python source/taptap.py 2>&1)
-          echo "原始输出:"
           echo "$OUTPUT"
 
-          PARSED=$(printf '%s\n' "$OUTPUT" | python -c '
-import sys, json
-result = None
-for line in sys.stdin:
-    line = line.strip()
-    if not line.startswith("{"):
-        continue
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if isinstance(obj, dict) and isinstance(obj.get("data"), dict) and "apk" in obj["data"]:
-        result = obj
-if result is None:
-    sys.exit("未找到含 data.apk 的合法 JSON")
-print(json.dumps(result))
-')
+          cat > /tmp/parse_taptap.py <<'PYEOF'
+          import sys
+          import json
+
+          result = None
+          for line in sys.stdin:
+              line = line.strip()
+              if not line.startswith("{"):
+                  continue
+              try:
+                  obj = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if isinstance(obj, dict) and isinstance(obj.get("data"), dict) and "apk" in obj["data"]:
+                  result = obj
+
+          if result is None:
+              sys.exit("未找到含 data.apk 的合法 JSON")
+
+          print(json.dumps(result))
+          PYEOF
+
+          PARSED=$(printf '%s\n' "$OUTPUT" | python /tmp/parse_taptap.py)
 
           VERSION_CODE=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_code'])")
           VERSION_NAME=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_name'])")
-          DOWNLOAD=$(echo "$PARSED"    | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['download'])")
-
-          echo "version_code = $VERSION_CODE"
-          echo "version_name = $VERSION_NAME"
-          echo "download     = $DOWNLOAD"
+          DOWNLOAD=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['download'])")
 
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "download=$DOWNLOAD"         >> "$GITHUB_OUTPUT"
+          echo "download=$DOWNLOAD" >> "$GITHUB_OUTPUT"
 
-      - name: 读取已保存的 version_code
+      - name: Read saved version
         id: saved
         run: |
           if [ -f version.txt ]; then
@@ -73,10 +74,9 @@ print(json.dumps(result))
           else
             SAVED=""
           fi
-          echo "已保存: '$SAVED'"
           echo "saved=$SAVED" >> "$GITHUB_OUTPUT"
 
-      - name: 比较版本
+      - name: Compare version
         id: cmp
         run: |
           if [ "${{ steps.parse.outputs.version_code }}" != "${{ steps.saved.outputs.saved }}" ]; then
@@ -85,31 +85,28 @@ print(json.dumps(result))
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------- 仅在版本变化时执行 ----------
-      - name: 下载 APK
+      - name: Download APK
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euo pipefail
           mkdir -p output
-          URL="${{ steps.parse.outputs.download }}"
-          echo "下载: $URL"
-          curl -L --fail --retry 3 -o "output/${{ steps.parse.outputs.version_code }}.apk" "$URL"
+          curl -L --fail --retry 3 -o "output/${{ steps.parse.outputs.version_code }}.apk" "${{ steps.parse.outputs.download }}"
           ls -lh output/
 
-      - name: 运行 gameInformation.py
+      - name: Run gameInformation.py
         if: steps.cmp.outputs.changed == 'true'
         run: python source/gameInformation.py
 
-      - name: 运行 resource.py
+      - name: Run resource.py
         if: steps.cmp.outputs.changed == 'true'
         run: python source/resource.py
 
-      - name: 更新 version.txt
+      - name: Update version.txt
         if: steps.cmp.outputs.changed == 'true'
         run: |
           echo "${{ steps.parse.outputs.version_code }}" > version.txt
 
-      - name: 提交并推送（排除 APK）
+      - name: Commit and push (exclude APK)
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -126,20 +123,17 @@ print(json.dumps(result))
             git push
           fi
 
-      # ---------- 压缩每个文件夹 ----------
-      - name: 压缩各文件夹为 Phigros_Resource-<文件夹名>.zip
+      - name: Zip each resource folder
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euo pipefail
           mkdir -p release-assets
 
-          # 找出仓库里所有顶层目录（排除 .git / .github / output / release-assets / source）
           for dir in */; do
             dir="${dir%/}"
             case "$dir" in
               .git|.github|output|release-assets|source) continue ;;
             esac
-            # 只处理非空目录
             if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
               echo "压缩: $dir"
               zip -r "release-assets/Phigros_Resource-${dir}.zip" "$dir"
@@ -148,8 +142,7 @@ print(json.dumps(result))
 
           ls -lh release-assets/
 
-      # ---------- 发布 Release ----------
-      - name: 发布 Release（tag = version_name）
+      - name: Publish Release
         if: steps.cmp.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
