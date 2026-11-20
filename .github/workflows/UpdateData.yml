@@ -1,10 +1,12 @@
-name: Update TapTap Resources
+name: Update Phi Resources
 
 on:
-  workflow_dispatch:        # 手动触发
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
 
 permissions:
-  contents: write           # 允许 push 回仓库
+  contents: write
 
 jobs:
   update:
@@ -13,12 +15,12 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0    # 需要完整历史用于 git 操作
+          fetch-depth: 0
 
       - name: 设置 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -27,28 +29,49 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: 运行 taptap.py 并解析 version_code
+      - name: 运行 taptap.py 并解析 version_code / version_name / download
         id: parse
         run: |
           set -euo pipefail
-          OUTPUT=$(python source/taptap.py)
-          echo "原始输出: $OUTPUT"
+          OUTPUT=$(python source/taptap.py 2>&1)
+          echo "原始输出:"
+          echo "$OUTPUT"
 
-          # 提取 version_code 和 download
-          VERSION_CODE=$(echo "$OUTPUT" | python -c "import sys,json; d=json.load(sys.stdin); print(d['data']['apk']['version_code'])")
-          DOWNLOAD=$(echo "$OUTPUT"    | python -c "import sys,json; d=json.load(sys.stdin); print(d['data']['apk']['download'])")
+          PARSED=$(printf '%s\n' "$OUTPUT" | python -c '
+import sys, json
+result = None
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(obj, dict) and isinstance(obj.get("data"), dict) and "apk" in obj["data"]:
+        result = obj
+if result is None:
+    sys.exit("未找到含 data.apk 的合法 JSON")
+print(json.dumps(result))
+')
+
+          VERSION_CODE=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_code'])")
+          VERSION_NAME=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_name'])")
+          DOWNLOAD=$(echo "$PARSED"    | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['download'])")
 
           echo "version_code = $VERSION_CODE"
+          echo "version_name = $VERSION_NAME"
           echo "download     = $DOWNLOAD"
 
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "download=$DOWNLOAD"         >> "$GITHUB_OUTPUT"
 
       - name: 读取已保存的 version_code
         id: saved
         run: |
           if [ -f version.txt ]; then
-            SAVED=$(cat version.txt | tr -d '[:space:]')
+            SAVED=$(tr -d '[:space:]' < version.txt)
           else
             SAVED=""
           fi
@@ -64,7 +87,7 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------- 以下仅在版本变化时执行 ----------
+      # ---------- 仅在版本变化时执行 ----------
       - name: 下载 APK
         if: steps.cmp.outputs.changed == 'true'
         run: |
@@ -88,7 +111,7 @@ jobs:
         run: |
           echo "${{ steps.parse.outputs.version_code }}" > version.txt
 
-      - name: 提交并推送
+      - name: 提交并推送（排除 APK）
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -96,9 +119,47 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add -A
+          git reset -- 'output/*.apk' || true
+
           if git diff --cached --quiet; then
-            echo "没有变更，跳过提交"
+            echo "没有需要提交的变更"
           else
             git commit -m "chore: update resources for version_code ${{ steps.parse.outputs.version_code }}"
             git push
           fi
+
+      # ---------- 压缩每个文件夹 ----------
+      - name: 压缩各文件夹为 Phigros_Resource-<文件夹名>.zip
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          # 找出仓库里所有顶层目录（排除 .git / .github / output / release-assets / source）
+          for dir in */; do
+            dir="${dir%/}"
+            case "$dir" in
+              .git|.github|output|release-assets|source) continue ;;
+            esac
+            # 只处理非空目录
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+              echo "压缩: $dir"
+              zip -r "release-assets/Phigros_Resource-${dir}.zip" "$dir"
+            fi
+          done
+
+          ls -lh release-assets/
+
+      # ---------- 发布 Release ----------
+      - name: 发布 Release（tag = version_name）
+        if: steps.cmp.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.parse.outputs.version_name }}
+          name: ${{ steps.parse.outputs.version_name }}
+          files: |
+            release-assets/*.zip
+            output/*.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
