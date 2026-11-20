@@ -1,4 +1,4 @@
-name: Update Phi Resources
+name: Update TapTap Resources
 
 on:
   workflow_dispatch:
