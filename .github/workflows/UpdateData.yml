@@ -9,7 +9,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -136,7 +136,7 @@ jobs:
         run: |
           echo "${{ steps.parse.outputs.version_code }}" > version.txt
 
-      # ========== 分批 Commit & Push（核心修复） ==========
+      # ========== 分批 Commit & Push ==========
       - name: Git config & cleanup
         if: steps.cmp.outputs.changed == 'true'
         run: |
@@ -210,7 +210,8 @@ jobs:
           # 6. version.txt
           commit_and_push "chore: update version.txt (${{ steps.parse.outputs.version_code }})" version.txt
 
-      - name: Zip each resource folder
+      # ========== 压缩 & Release ==========
+      - name: Zip each resource folder (max compression)
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euxo pipefail
@@ -219,8 +220,8 @@ jobs:
           for name in info avatar chart illustration illustrationBlur illustrationLowRes music; do
             dir="$name"
             if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-              echo "压缩: $dir -> Phigros_Resource-${name}.zip"
-              zip -r "release-assets/Phigros_Resource-${name}.zip" "$dir"
+              echo "压缩: $dir -> Phigros_Resource-${name}.zip (最高压缩等级)"
+              zip -9 -r -q "release-assets/Phigros_Resource-${name}.zip" "$dir"
             else
               echo "跳过（不存在或为空）: $dir"
             fi
@@ -237,6 +238,5 @@ jobs:
           name: ${{ steps.parse.outputs.version_name }}
           files: |
             release-assets/*.zip
-            output/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
