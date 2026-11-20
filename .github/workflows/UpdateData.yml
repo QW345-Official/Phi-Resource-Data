@@ -32,35 +32,20 @@ jobs:
         run: |
           set -euo pipefail
           OUTPUT=$(python source/taptap.py 2>&1)
+          echo "===== taptap.py 输出 ====="
           echo "$OUTPUT"
 
-          cat > /tmp/parse_taptap.py <<'PYEOF'
-          import sys
-          import json
-
-          result = None
-          for line in sys.stdin:
-              line = line.strip()
-              if not line.startswith("{"):
-                  continue
-              try:
-                  obj = json.loads(line)
-              except json.JSONDecodeError:
-                  continue
-              if isinstance(obj, dict) and isinstance(obj.get("data"), dict) and "apk" in obj["data"]:
-                  result = obj
-
-          if result is None:
-              sys.exit("未找到含 data.apk 的合法 JSON")
-
-          print(json.dumps(result))
-          PYEOF
-
-          PARSED=$(printf '%s\n' "$OUTPUT" | python /tmp/parse_taptap.py)
+          PARSED=$(printf '%s\n' "$OUTPUT" | python source/parse_taptap.py)
+          echo "===== 解析结果 ====="
+          echo "$PARSED"
 
           VERSION_CODE=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_code'])")
           VERSION_NAME=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_name'])")
           DOWNLOAD=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['download'])")
+
+          echo "version_code=$VERSION_CODE"
+          echo "version_name=$VERSION_NAME"
+          echo "download=$DOWNLOAD"
 
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
