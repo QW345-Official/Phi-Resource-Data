@@ -1,32 +1,31 @@
 import sys
+import ast
 import json
-import re
 
 
 def main():
     text = sys.stdin.read()
 
-    # 从文本中找出所有以 {"data" 开头的行（允许前面有空白）
-    candidates = re.findall(r'^\s*(\{"data".*?\})\s*$', text, flags=re.MULTILINE)
-    if not candidates:
-        # 兜底：找最后一个以 { 开头且含 "data" 的整行
-        candidates = [
-            line.strip()
-            for line in text.splitlines()
-            if line.strip().startswith("{") and '"data"' in line
-        ]
-
     result = None
-    for cand in candidates:
-        try:
-            obj = json.loads(cand)
-        except json.JSONDecodeError:
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
             continue
-        if isinstance(obj, dict) and isinstance(obj.get("data"), dict) and "apk" in obj["data"]:
+        try:
+            obj = ast.literal_eval(line)
+        except (ValueError, SyntaxError):
+            continue
+        if (
+            isinstance(obj, dict)
+            and isinstance(obj.get("data"), dict)
+            and "apk" in obj["data"]
+            and isinstance(obj["data"]["apk"], dict)
+            and "download" in obj["data"]["apk"]
+        ):
             result = obj
 
     if result is None:
-        sys.exit("未找到含 data.apk 的合法 JSON")
+        sys.exit("未找到含 data.apk.download 的字典")
 
     print(json.dumps(result))
 
