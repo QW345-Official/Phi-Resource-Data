@@ -136,26 +136,79 @@ jobs:
         run: |
           echo "${{ steps.parse.outputs.version_code }}" > version.txt
 
-      - name: Commit and push (exclude APK)
+      # ========== 分批 Commit & Push（核心修复） ==========
+      - name: Git config & cleanup
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config http.postBuffer 524288000
+
+          # 清理不该提交的文件
+          rm -rf source/__pycache__
+          git rm -r --cached source/__pycache__ || true
+
+      - name: Commit and push (batch)
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
-          git reset -- 'output/*.apk' || true
+          commit_and_push() {
+            local msg="$1"
+            shift
+            local paths=("$@")
 
-          git status --short > /tmp/status.txt || true
-          echo "===== 变更文件数: $(wc -l < /tmp/status.txt) ====="
-          head -n 100 /tmp/status.txt || true
+            git add "${paths[@]}"
+            if git diff --cached --quiet; then
+              echo "没有变更，跳过: $msg"
+              return
+            fi
 
-          if git diff --cached --quiet; then
-            echo "没有需要提交的变更"
-          else
-            git commit -m "chore: update resources for version_code ${{ steps.parse.outputs.version_code }}"
-            git push
+            git commit -m "$msg"
+
+            for i in 1 2 3; do
+              echo "Push 尝试 $i ..."
+              if git push; then
+                echo "Push 成功"
+                return
+              fi
+              echo "Push 失败，等待 10s 后重试..."
+              sleep 10
+            done
+
+            echo "::error::Push 多次失败，终止"
+            exit 1
+          }
+
+          # 1. info
+          if [ -d info ]; then
+            commit_and_push "chore: update resources info (${{ steps.parse.outputs.version_code }})" info
           fi
+
+          # 2. avatar
+          if [ -d avatar ]; then
+            commit_and_push "chore: update resources avatar (${{ steps.parse.outputs.version_code }})" avatar
+          fi
+
+          # 3. chart
+          if [ -d chart ]; then
+            commit_and_push "chore: update resources chart (${{ steps.parse.outputs.version_code }})" chart
+          fi
+
+          # 4. illustration 系列
+          for d in illustration illustrationBlur illustrationLowRes; do
+            if [ -d "$d" ]; then
+              commit_and_push "chore: update resources $d (${{ steps.parse.outputs.version_code }})" "$d"
+            fi
+          done
+
+          # 5. music（最重，单独一批）
+          if [ -d music ]; then
+            commit_and_push "chore: update resources music (${{ steps.parse.outputs.version_code }})" music
+          fi
+
+          # 6. version.txt
+          commit_and_push "chore: update version.txt (${{ steps.parse.outputs.version_code }})" version.txt
 
       - name: Zip each resource folder
         if: steps.cmp.outputs.changed == 'true'
