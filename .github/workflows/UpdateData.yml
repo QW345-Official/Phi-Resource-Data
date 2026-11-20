@@ -84,11 +84,11 @@ jobs:
 
       - name: Run gameInformation.py
         if: steps.cmp.outputs.changed == 'true'
-        run: python source/gameInformation.py
+        run: python source/gameInformation.py "output/${{ steps.parse.outputs.version_code }}.apk"
 
       - name: Run resource.py
         if: steps.cmp.outputs.changed == 'true'
-        run: python source/resource.py
+        run: python source/resource.py "output/${{ steps.parse.outputs.version_code }}.apk"
 
       - name: Update version.txt
         if: steps.cmp.outputs.changed == 'true'
