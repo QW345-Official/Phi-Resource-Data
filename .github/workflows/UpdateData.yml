@@ -1,4 +1,4 @@
-name: Update TapTap Resources
+name: Update Resources
 
 on:
   workflow_dispatch:
