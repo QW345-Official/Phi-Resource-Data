@@ -24,6 +24,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libvorbis-dev libogg-dev
           python -m pip install --upgrade pip
           if [ -f source/requirements.txt ]; then
             pip install -r source/requirements.txt
@@ -81,8 +83,21 @@ jobs:
           mkdir -p output
           curl -L --fail --retry 3 -o "output/${{ steps.parse.outputs.version_code }}.apk" "${{ steps.parse.outputs.download }}"
           ls -lh output/
-          echo "===== 下载后内存 ====="
           free -h
+
+      - name: Diagnose vorbis libraries
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          echo "=== libvorbis* 文件 ==="
+          ls -la /usr/lib/x86_64-linux-gnu/libvorbis* || true
+          echo "=== libvorbisenc.so 是否含 encode 符号 ==="
+          for f in /usr/lib/x86_64-linux-gnu/libvorbisenc.so*; do
+            [ -e "$f" ] || continue
+            echo "--- $f ---"
+            nm -D "$f" 2>/dev/null | grep vorbis_encode_setup_vbr || echo "未找到"
+          done
+          echo "=== libvorbis.so.0 是否含 encode 符号 ==="
+          nm -D /usr/lib/x86_64-linux-gnu/libvorbis.so.0 2>/dev/null | grep vorbis_encode_setup_vbr || echo "未找到"
 
       - name: Run gameInformation.py
         if: steps.cmp.outputs.changed == 'true'
@@ -98,12 +113,14 @@ jobs:
       - name: Run resource.py
         if: steps.cmp.outputs.changed == 'true'
         working-directory: source
+        env:
+          # 让 libvorbisenc 先于 libvorbis 加载，解决 fsb5 按 libvorbis.so.0 找 encode 符号的问题
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libvorbisenc.so.2
         run: |
           set +e
           python resource.py "../output/${{ steps.parse.outputs.version_code }}.apk"
           CODE=$?
           echo "resource.py 退出码: $CODE"
-          echo "===== resource.py 结束后内存 ====="
           free -h
           if [ $CODE -eq 137 ]; then
             echo "::error::resource.py 被 SIGKILL（退出码 137），极可能是内存不足（OOM）。"
@@ -144,7 +161,6 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
 
-          # 扫描仓库根目录下的资源文件夹（排除系统/输出/源码目录）
           for dir in */; do
             dir="${dir%/}"
             case "$dir" in
@@ -156,7 +172,6 @@ jobs:
             fi
           done
 
-          # 如果 resource.py 把资源写在 source/ 下，也一并压缩
           for dir in source/*/; do
             [ -d "$dir" ] || continue
             name=$(basename "$dir")
