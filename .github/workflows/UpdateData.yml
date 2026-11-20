@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvorbis-dev libogg-dev
+          sudo apt-get install -y libvorbis-dev libogg-dev zip
           python -m pip install --upgrade pip
           if [ -f source/requirements.txt ]; then
             pip install -r source/requirements.txt
@@ -85,20 +85,6 @@ jobs:
           ls -lh output/
           free -h
 
-      - name: Diagnose vorbis libraries
-        if: steps.cmp.outputs.changed == 'true'
-        run: |
-          echo "=== libvorbis* 文件 ==="
-          ls -la /usr/lib/x86_64-linux-gnu/libvorbis* || true
-          echo "=== libvorbisenc.so 是否含 encode 符号 ==="
-          for f in /usr/lib/x86_64-linux-gnu/libvorbisenc.so*; do
-            [ -e "$f" ] || continue
-            echo "--- $f ---"
-            nm -D "$f" 2>/dev/null | grep vorbis_encode_setup_vbr || echo "未找到"
-          done
-          echo "=== libvorbis.so.0 是否含 encode 符号 ==="
-          nm -D /usr/lib/x86_64-linux-gnu/libvorbis.so.0 2>/dev/null | grep vorbis_encode_setup_vbr || echo "未找到"
-
       - name: Run gameInformation.py
         if: steps.cmp.outputs.changed == 'true'
         working-directory: source
@@ -114,7 +100,6 @@ jobs:
         if: steps.cmp.outputs.changed == 'true'
         working-directory: source
         env:
-          # 让 libvorbisenc 先于 libvorbis 加载，解决 fsb5 按 libvorbis.so.0 找 encode 符号的问题
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libvorbisenc.so.2
         run: |
           set +e
@@ -129,6 +114,23 @@ jobs:
             echo "::error::resource.py 失败，退出码 $CODE"
             exit $CODE
           fi
+
+      - name: Move generated folders to repo root
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          set -euxo pipefail
+          # 把 source/ 下生成的目录移到仓库根目录
+          for name in info avatar chart illustration illustrationBlur illustrationLowRes music; do
+            if [ -d "source/$name" ]; then
+              echo "移动 source/$name -> $name"
+              rm -rf "$name"
+              mv "source/$name" "$name"
+            else
+              echo "不存在，跳过: source/$name"
+            fi
+          done
+          echo "===== 根目录内容 ====="
+          ls -la
 
       - name: Update version.txt
         if: steps.cmp.outputs.changed == 'true'
@@ -145,8 +147,8 @@ jobs:
           git add -A
           git reset -- 'output/*.apk' || true
 
-          echo "===== 待提交文件 ====="
-          git status --short
+          echo "===== 待提交文件（前 100 行）====="
+          git status --short | head -n 100
 
           if git diff --cached --quiet; then
             echo "没有需要提交的变更"
@@ -158,32 +160,21 @@ jobs:
       - name: Zip each resource folder
         if: steps.cmp.outputs.changed == 'true'
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           mkdir -p release-assets
 
-          for dir in */; do
-            dir="${dir%/}"
-            case "$dir" in
-              .git|.github|output|release-assets|source) continue ;;
-            esac
+          # 压缩根目录下的资源文件夹
+          for name in info avatar chart illustration illustrationBlur illustrationLowRes music; do
+            dir="$name"
             if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-              echo "压缩: $dir"
-              zip -r "release-assets/Phigros_Resource-${dir}.zip" "$dir"
-            fi
-          done
-
-          for dir in source/*/; do
-            [ -d "$dir" ] || continue
-            name=$(basename "$dir")
-            case "$name" in
-              __pycache__) continue ;;
-            esac
-            if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-              echo "压缩: source/$name"
+              echo "压缩: $dir -> Phigros_Resource-${name}.zip"
               zip -r "release-assets/Phigros_Resource-${name}.zip" "$dir"
+            else
+              echo "跳过（不存在或为空）: $dir"
             fi
           done
 
+          echo "===== release-assets 内容 ====="
           ls -lh release-assets/
 
       - name: Publish Release
@@ -195,6 +186,5 @@ jobs:
           files: |
             release-assets/*.zip
             output/*.apk
-          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
