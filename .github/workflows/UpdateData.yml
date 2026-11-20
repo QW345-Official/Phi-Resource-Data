@@ -9,7 +9,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -81,16 +81,37 @@ jobs:
           mkdir -p output
           curl -L --fail --retry 3 -o "output/${{ steps.parse.outputs.version_code }}.apk" "${{ steps.parse.outputs.download }}"
           ls -lh output/
+          echo "===== 下载后内存 ====="
+          free -h
 
       - name: Run gameInformation.py
         if: steps.cmp.outputs.changed == 'true'
         working-directory: source
-        run: python gameInformation.py "../output/${{ steps.parse.outputs.version_code }}.apk"
+        run: |
+          set +e
+          python gameInformation.py "../output/${{ steps.parse.outputs.version_code }}.apk"
+          CODE=$?
+          echo "gameInformation.py 退出码: $CODE"
+          free -h
+          if [ $CODE -ne 0 ]; then exit $CODE; fi
 
       - name: Run resource.py
         if: steps.cmp.outputs.changed == 'true'
         working-directory: source
-        run: python resource.py "../output/${{ steps.parse.outputs.version_code }}.apk"
+        run: |
+          set +e
+          python resource.py "../output/${{ steps.parse.outputs.version_code }}.apk"
+          CODE=$?
+          echo "resource.py 退出码: $CODE"
+          echo "===== resource.py 结束后内存 ====="
+          free -h
+          if [ $CODE -eq 137 ]; then
+            echo "::error::resource.py 被 SIGKILL（退出码 137），极可能是内存不足（OOM）。"
+            exit 137
+          elif [ $CODE -ne 0 ]; then
+            echo "::error::resource.py 失败，退出码 $CODE"
+            exit $CODE
+          fi
 
       - name: Update version.txt
         if: steps.cmp.outputs.changed == 'true'
@@ -107,6 +128,9 @@ jobs:
           git add -A
           git reset -- 'output/*.apk' || true
 
+          echo "===== 待提交文件 ====="
+          git status --short
+
           if git diff --cached --quiet; then
             echo "没有需要提交的变更"
           else
@@ -120,6 +144,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
 
+          # 扫描仓库根目录下的资源文件夹（排除系统/输出/源码目录）
           for dir in */; do
             dir="${dir%/}"
             case "$dir" in
@@ -128,6 +153,19 @@ jobs:
             if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
               echo "压缩: $dir"
               zip -r "release-assets/Phigros_Resource-${dir}.zip" "$dir"
+            fi
+          done
+
+          # 如果 resource.py 把资源写在 source/ 下，也一并压缩
+          for dir in source/*/; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            case "$name" in
+              __pycache__) continue ;;
+            esac
+            if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+              echo "压缩: source/$name"
+              zip -r "release-assets/Phigros_Resource-${name}.zip" "$dir"
             fi
           done
 
