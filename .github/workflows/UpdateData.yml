@@ -25,23 +25,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f source/requirements.txt ]; then
+            pip install -r source/requirements.txt
+          else
+            echo "source/requirements.txt 不存在，跳过"
+          fi
 
       - name: Run taptap.py and parse
         id: parse
         run: |
           set -euo pipefail
-          OUTPUT=$(python source/taptap.py 2>&1)
+          python source/taptap.py > /tmp/taptap_raw.txt 2>&1 || true
           echo "===== taptap.py 输出 ====="
-          echo "$OUTPUT"
+          cat /tmp/taptap_raw.txt
 
-          PARSED=$(printf '%s\n' "$OUTPUT" | python source/parse_taptap.py)
+          python source/parse_taptap.py < /tmp/taptap_raw.txt > /tmp/taptap_parsed.json
           echo "===== 解析结果 ====="
-          echo "$PARSED"
+          cat /tmp/taptap_parsed.json
 
-          VERSION_CODE=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_code'])")
-          VERSION_NAME=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['version_name'])")
-          DOWNLOAD=$(echo "$PARSED" | python -c "import sys,json; print(json.load(sys.stdin)['data']['apk']['download'])")
+          VERSION_CODE=$(python -c "import json; print(json.load(open('/tmp/taptap_parsed.json'))['data']['apk']['version_code'])")
+          VERSION_NAME=$(python -c "import json; print(json.load(open('/tmp/taptap_parsed.json'))['data']['apk']['version_name'])")
+          DOWNLOAD=$(python -c "import json; print(json.load(open('/tmp/taptap_parsed.json'))['data']['apk']['download'])")
 
           echo "version_code=$VERSION_CODE"
           echo "version_name=$VERSION_NAME"
