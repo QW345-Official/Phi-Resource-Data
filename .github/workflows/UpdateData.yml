@@ -215,20 +215,57 @@ jobs:
         if: steps.cmp.outputs.changed == 'true'
         run: |
           set -euxo pipefail
-          mkdir -p release-assets
+          mkdir -p zip
 
           for name in info avatar chart illustration illustrationBlur illustrationLowRes music; do
             dir="$name"
             if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-              echo "压缩: $dir -> Phigros_Resource-${name}.zip (最高压缩等级)"
-              zip -9 -r -q "release-assets/Phigros_Resource-${name}.zip" "$dir"
+              echo "压缩: $dir -> zip/Phigros_Resource-${name}.zip (最高压缩等级)"
+              zip -9 -r -q "zip/Phigros_Resource-${name}.zip" "$dir"
             else
               echo "跳过（不存在或为空）: $dir"
             fi
           done
 
-          echo "===== release-assets 内容 ====="
-          ls -lh release-assets/
+          echo "===== zip/ 内容 ====="
+          ls -lh zip/
+
+      - name: Commit and push zips
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          commit_and_push() {
+            local msg="$1"
+            shift
+            local paths=("$@")
+
+            git add "${paths[@]}"
+            if git diff --cached --quiet; then
+              echo "没有变更，跳过: $msg"
+              return
+            fi
+
+            git commit -m "$msg"
+
+            for i in 1 2 3; do
+              echo "Push 尝试 $i ..."
+              if git push; then
+                echo "Push 成功"
+                return
+              fi
+              echo "Push 失败，等待 10s 后重试..."
+              sleep 10
+            done
+
+            echo "::error::Push 多次失败，终止"
+            exit 1
+          }
+
+          # zip 压缩包（单独一批，文件大）
+          if [ -d zip ]; then
+            commit_and_push "chore: add resource zips (${{ steps.parse.outputs.version_code }})" zip
+          fi
 
       - name: Publish Release
         if: steps.cmp.outputs.changed == 'true'
@@ -237,6 +274,6 @@ jobs:
           tag_name: ${{ steps.parse.outputs.version_name }}
           name: ${{ steps.parse.outputs.version_name }}
           files: |
-            release-assets/*.zip
+            zip/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
