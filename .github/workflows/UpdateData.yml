@@ -210,7 +210,7 @@ jobs:
           # 6. version.txt
           commit_and_push "chore: update version.txt (${{ steps.parse.outputs.version_code }})" version.txt
 
-      # ========== 压缩 & Release ==========
+      # ========== 压缩（zip/ 本地，不进 git） ==========
       - name: Zip each resource folder (max compression)
         if: steps.cmp.outputs.changed == 'true'
         run: |
@@ -229,43 +229,6 @@ jobs:
 
           echo "===== zip/ 内容 ====="
           ls -lh zip/
-
-      - name: Commit and push zips
-        if: steps.cmp.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-
-          commit_and_push() {
-            local msg="$1"
-            shift
-            local paths=("$@")
-
-            git add "${paths[@]}"
-            if git diff --cached --quiet; then
-              echo "没有变更，跳过: $msg"
-              return
-            fi
-
-            git commit -m "$msg"
-
-            for i in 1 2 3; do
-              echo "Push 尝试 $i ..."
-              if git push; then
-                echo "Push 成功"
-                return
-              fi
-              echo "Push 失败，等待 10s 后重试..."
-              sleep 10
-            done
-
-            echo "::error::Push 多次失败，终止"
-            exit 1
-          }
-
-          # zip 压缩包（单独一批，文件大）
-          if [ -d zip ]; then
-            commit_and_push "chore: add resource zips (${{ steps.parse.outputs.version_code }})" zip
-          fi
 
       - name: Publish Release
         if: steps.cmp.outputs.changed == 'true'
